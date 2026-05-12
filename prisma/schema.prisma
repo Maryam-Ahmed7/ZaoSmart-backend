@@ -73,3 +73,18 @@ model Scan {
   @@index([userId])
   @@index([farmId])
 }
+
+model Disease {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String
+  cropType    String
+  severity    String
+  symptoms    String
+  treatment   String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([cropType])
+}

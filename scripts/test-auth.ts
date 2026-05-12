@@ -359,6 +359,119 @@ async function runScansTests(token: string, otherToken: string, farmId: string):
   check('scan retains farmId in DB',      dbScans.find(s => s.id === scanId)?.farmId === farmId);
 }
 
+// ─── Diseases tests ────────────────────────────────────────────────────────────
+async function runDiseasesTests(token: string): Promise<void> {
+  const D = '/diseases';
+
+  const validDisease = {
+    name:        'Northern Leaf Blight',
+    description: 'Fungal disease causing large lesions on maize leaves',
+    cropType:    'maize',
+    severity:    'high',
+    symptoms:    'Long, grayish-green cigar-shaped lesions on leaves',
+    treatment:   'Apply fungicide; use resistant varieties',
+  };
+
+  // ── 18. CREATE DISEASE (protected) ───────────────────────────────────────────
+  section('18 ▸ POST /diseases');
+
+  check('401 without token',            (await post(D, '/', validDisease)).status === 401);
+
+  const d1 = await post(D, '/', validDisease, token);
+  check('201 on valid create',          d1.status === 201,          `got ${d1.status}`);
+  check('returns id',                   typeof d1.body.id === 'string');
+  check('name stored correctly',        d1.body.name === validDisease.name);
+  check('severity stored',              d1.body.severity === 'high');
+  check('isActive defaults to true',    d1.body.isActive === true);
+
+  const d2 = await post(D, '/', {
+    name: 'Coffee Leaf Rust', description: 'Fungal disease on coffee',
+    cropType: 'coffee', severity: 'medium',
+    symptoms: 'Yellow-orange powdery spots on leaf undersides',
+    treatment: 'Copper-based fungicides; remove infected leaves',
+  }, token);
+  check('201 second disease',           d2.status === 201,          `got ${d2.status}`);
+
+  const dDup = await post(D, '/', validDisease, token);
+  check('409 on duplicate name',        dDup.status === 409,        `got ${dDup.status}`);
+
+  const dBadCrop = await post(D, '/', { ...validDisease, name: 'X', cropType: 'wheat' }, token);
+  check('400 on invalid cropType',      dBadCrop.status === 400,    `got ${dBadCrop.status}`);
+
+  const dBadSev = await post(D, '/', { ...validDisease, name: 'Y', severity: 'critical' }, token);
+  check('400 on invalid severity',      dBadSev.status === 400,     `got ${dBadSev.status}`);
+
+  const dMissing = await post(D, '/', { name: 'Z', cropType: 'maize' }, token);
+  check('400 on missing required fields', dMissing.status === 400,  `got ${dMissing.status}`);
+
+  const diseaseId = d1.body.id as string;
+
+  // ── 19. LIST DISEASES (public) ────────────────────────────────────────────────
+  section('19 ▸ GET /diseases');
+
+  const listAll = await get(D, '/');
+  check('200 with no token (public)',   listAll.status === 200 && Array.isArray(listAll.body));
+  check('returns created diseases',     (listAll.body as unknown[]).length >= 2);
+
+  const listMaize = await get(D, '/?cropType=maize');
+  check('cropType filter works',        (listMaize.body as J[]).every(d => d.cropType === 'maize'));
+  check('200 on cropType filter (public)', listMaize.status === 200);
+
+  const listBadCrop = await get(D, '/?cropType=rice');
+  check('400 on invalid cropType filter', listBadCrop.status === 400, `got ${listBadCrop.status}`);
+
+  // ── 20. GET SINGLE DISEASE (public) ──────────────────────────────────────────
+  section('20 ▸ GET /diseases/:id');
+
+  const single = await get(D, `/${diseaseId}`);
+  check('200 with no token (public)',   single.status === 200,      `got ${single.status}`);
+  check('correct disease returned',     single.body.id === diseaseId);
+  check('all fields present',           !!single.body.symptoms && !!single.body.treatment);
+
+  const notFound = await get(D, '/00000000-0000-0000-0000-000000000000');
+  check('404 on nonexistent id',        notFound.status === 404,    `got ${notFound.status}`);
+
+  // ── 21. UPDATE DISEASE (protected) ───────────────────────────────────────────
+  section('21 ▸ PUT /diseases/:id');
+
+  check('401 without token',            (await put(D, `/${diseaseId}`, { severity: 'medium' }, 'bad')).status === 401);
+
+  const upd = await put(D, `/${diseaseId}`, { severity: 'medium', treatment: 'Updated treatment' }, token);
+  check('200 on valid update',          upd.status === 200,         `got ${upd.status}`);
+  check('severity updated',             upd.body.severity === 'medium');
+  check('treatment updated',            upd.body.treatment === 'Updated treatment');
+  check('name unchanged',               upd.body.name === validDisease.name);
+
+  const updBadSev = await put(D, `/${diseaseId}`, { severity: 'extreme' }, token);
+  check('400 on invalid severity',      updBadSev.status === 400,   `got ${updBadSev.status}`);
+
+  const updNotFound = await put(D, '/00000000-0000-0000-0000-000000000000', { severity: 'low' }, token);
+  check('404 on nonexistent id',        updNotFound.status === 404, `got ${updNotFound.status}`);
+
+  // ── 22. DELETE DISEASE (protected) ───────────────────────────────────────────
+  section('22 ▸ DELETE /diseases/:id');
+
+  check('401 without token',            (await del(D, `/${d2.body.id}`, 'bad')).status === 401);
+
+  const gone = await del(D, `/${d2.body.id as string}`, token);
+  check('204 on valid delete',          gone.status === 204,        `got ${gone.status}`);
+  check('404 after deletion',           (await get(D, `/${d2.body.id}`)).status === 404);
+
+  const delNotFound = await del(D, '/00000000-0000-0000-0000-000000000000', token);
+  check('404 on nonexistent id',        delNotFound.status === 404, `got ${delNotFound.status}`);
+
+  // ── 23. DB SANITY ─────────────────────────────────────────────────────────────
+  section('23 ▸ Database sanity (diseases)');
+
+  const dbDisease = await prisma.disease.findUnique({ where: { id: diseaseId } });
+  check('disease exists in DB',         dbDisease !== null);
+  check('severity reflects update',     dbDisease?.severity === 'medium');
+  check('deleted disease gone from DB', !(await prisma.disease.findUnique({ where: { id: d2.body.id as string } })));
+
+  // Cleanup disease records created by this suite
+  await prisma.disease.deleteMany({ where: { id: { in: [diseaseId] } } });
+}
+
 // ─── Entry point ───────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
   const email      = `__test_${Date.now()}@zaosmart.dev`;
@@ -385,6 +498,7 @@ async function main(): Promise<void> {
 
     const farmId = await runFarmsTests(farmsToken, otherToken);
     await runScansTests(farmsToken, otherToken, farmId);
+    await runDiseasesTests(farmsToken);
   } finally {
     await prisma.user.deleteMany({ where: { email: { in: [email, otherEmail] } } });
     await prisma.$disconnect();

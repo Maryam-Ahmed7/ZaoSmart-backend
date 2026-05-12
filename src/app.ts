@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import authRouter from './routes/auth.routes';
 import farmsRouter from './routes/farms.routes';
 import scansRouter from './routes/scans.routes';
+import diseasesRouter from './routes/diseases.routes';
 
 const app = express();
 
@@ -10,6 +11,7 @@ app.use(express.json());
 app.use('/auth', authRouter);
 app.use('/farms', farmsRouter);
 app.use('/scans', scansRouter);
+app.use('/diseases', diseasesRouter);
 
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
