@@ -266,6 +266,18 @@ async function runFarmsTests(token: string, otherToken: string): Promise<string>
 async function runScansTests(token: string, otherToken: string, farmId: string): Promise<void> {
   const S = '/scans';
 
+  // Create a disease to use for linkage tests (isolated from the diseases test suite)
+  const linkDiseaseRes = await post('/diseases', '/', {
+    name:        'Maize Streak Virus',
+    description: 'Viral disease transmitted by leafhoppers',
+    cropType:    'maize',
+    severity:    'high',
+    symptoms:    'Chlorotic streaks parallel to leaf veins',
+    treatment:   'Remove infected plants; use virus-resistant varieties',
+  }, token);
+  const linkDiseaseId   = linkDiseaseRes.body.id as string;
+  const linkDiseaseName = 'Maize Streak Virus';
+
   // ── 13. CREATE SCAN ───────────────────────────────────────────────────────────
   section('13 ▸ POST /scans');
 
@@ -308,6 +320,34 @@ async function runScansTests(token: string, otherToken: string, farmId: string):
   const scanId    = s1.body.id as string;
   const minScanId = sMin.body.id as string;
 
+  // Disease linkage — scan whose predictedDisease matches an existing Disease record
+  const sLinked = await post(S, '/', {
+    imageUrl: 'uploads/scan_linked.jpg',
+    cropType: 'maize',
+    predictedDisease: linkDiseaseName,
+  }, token);
+  check('201 on disease-matched scan',      sLinked.status === 201,                    `got ${sLinked.status}`);
+  check('diseaseId auto-linked on match',   sLinked.body.diseaseId === linkDiseaseId);
+  check('disease object included',          (sLinked.body.disease as J)?.id === linkDiseaseId);
+  check('disease.name matches prediction',  (sLinked.body.disease as J)?.name === linkDiseaseName);
+  check('disease.severity present',         typeof (sLinked.body.disease as J)?.severity === 'string');
+
+  // No-match case — raw AI string that has no Disease record
+  const sNoMatch = await post(S, '/', {
+    imageUrl: 'uploads/scan_nomatch.jpg',
+    cropType: 'maize',
+    predictedDisease: 'Unknown Pathogen XYZ',
+  }, token);
+  check('diseaseId null when no match',     sNoMatch.body.diseaseId === null);
+  check('disease null when no match',       sNoMatch.body.disease === null);
+
+  // Backward-compat — s1 has no matching disease in DB yet (Northern Leaf Blight not seeded)
+  check('disease null for unmatched s1',    s1.body.diseaseId === null);
+  // No-disease scan should still have the disease key (just null)
+  check('disease key always present',       'disease' in sMin.body);
+
+  const linkedScanId = sLinked.body.id as string;
+
   // ── 14. LIST SCANS ────────────────────────────────────────────────────────────
   section('14 ▸ GET /scans');
 
@@ -329,16 +369,27 @@ async function runScansTests(token: string, otherToken: string, farmId: string):
   const listBoth = await get(S, `/?farmId=${farmId}&cropType=maize`, token);
   check('combined filter works',          Array.isArray(listBoth.body));
 
+  // Every item in the list should carry the disease key
+  check('disease key present in list',    (listAll.body as J[]).every(s => 'disease' in s));
+  // The linked scan should surface full disease data in the list
+  const listLinked = (listAll.body as J[]).find(s => s.id === linkedScanId);
+  check('linked disease included in list', (listLinked?.disease as J)?.id === linkDiseaseId);
+
   // ── 15. GET SINGLE SCAN ───────────────────────────────────────────────────────
   section('15 ▸ GET /scans/:id');
 
   const single = await get(S, `/${scanId}`, token);
   check('200 on own scan',                single.status === 200,     `got ${single.status}`);
   check('correct scan returned',          single.body.id === scanId);
+  check('disease key present in single',  'disease' in single.body);
 
   check('401 without token',              (await get(S, `/${scanId}`)).status === 401);
   check('404 on other user\'s scan',      (await get(S, `/${scanId}`, otherToken)).status === 404);
   check('404 on nonexistent id',          (await get(S, '/00000000-0000-0000-0000-000000000000', token)).status === 404);
+
+  const singleLinked = await get(S, `/${linkedScanId}`, token);
+  check('linked disease details in single', (singleLinked.body.disease as J)?.id === linkDiseaseId);
+  check('disease.treatment in single',      typeof (singleLinked.body.disease as J)?.treatment === 'string');
 
   // ── 16. DELETE SCAN ───────────────────────────────────────────────────────────
   section('16 ▸ DELETE /scans/:id');
@@ -357,6 +408,14 @@ async function runScansTests(token: string, otherToken: string, farmId: string):
   check('deleted scan gone from DB',      !dbScans.find(s => s.id === minScanId));
   check('kept scan still in DB',          !!dbScans.find(s => s.id === scanId));
   check('scan retains farmId in DB',      dbScans.find(s => s.id === scanId)?.farmId === farmId);
+
+  const dbLinked = await prisma.scan.findUnique({ where: { id: linkedScanId } });
+  check('diseaseId persisted in DB',      dbLinked?.diseaseId === linkDiseaseId);
+
+  // Cleanup: delete the disease created for linkage tests (SetNull keeps scans intact)
+  await prisma.disease.delete({ where: { id: linkDiseaseId } });
+  const dbLinkedAfter = await prisma.scan.findUnique({ where: { id: linkedScanId } });
+  check('diseaseId null after disease deleted (SetNull)', dbLinkedAfter?.diseaseId === null);
 }
 
 // ─── Diseases tests ────────────────────────────────────────────────────────────
