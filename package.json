@@ -8,7 +8,8 @@
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "test:auth": "ts-node --transpile-only scripts/test-auth.ts"
+    "test:auth": "ts-node --transpile-only scripts/test-auth.ts",
+    "test:e2e": "ts-node --transpile-only src/tests/e2e-flow.test.ts"
   },
   "keywords": [],
   "author": "",
