@@ -5,6 +5,7 @@
  */
 import 'dotenv/config';
 import http from 'http';
+import { randomUUID } from 'crypto';
 import app from '../src/app';
 import { prisma } from '../src/prisma';
 
@@ -531,6 +532,129 @@ async function runDiseasesTests(token: string): Promise<void> {
   await prisma.disease.deleteMany({ where: { id: { in: [diseaseId] } } });
 }
 
+// ─── Sync tests ────────────────────────────────────────────────────────────────
+async function runSyncTests(token: string, deviceId: string): Promise<void> {
+  const SY = '/sync';
+
+  // Client-generated UUIDs (as the mobile app would produce)
+  const clientFarmId  = randomUUID();
+  const clientScanId  = randomUUID();
+  const clientScan2Id = randomUUID();
+
+  // ── 24. POST /sync/upload ─────────────────────────────────────────────────────
+  section('24 ▸ POST /sync/upload');
+
+  check('401 without token', (await post(SY, '/upload', { deviceId })).status === 401);
+
+  const missingDevice = await post(SY, '/upload', { deviceId: randomUUID() }, token);
+  check('403 on unowned deviceId',          missingDevice.status === 403,  `got ${missingDevice.status}`);
+
+  const missingId = await post(SY, '/upload', {}, token);
+  check('400 on missing deviceId',          missingId.status === 400,      `got ${missingId.status}`);
+
+  // Sync a farm + two scans (one linked to that farm, one standalone)
+  const payload = {
+    deviceId,
+    farms: [
+      { id: clientFarmId, name: 'Offline Farm One', cropType: 'maize', region: 'Western' },
+    ],
+    scans: [
+      {
+        id:               clientScanId,
+        imageUrl:         'offline/scan_farm.jpg',
+        cropType:         'maize',
+        farmId:           clientFarmId,         // references the farm in same payload
+        predictedDisease: null,
+        confidence:       0.88,
+      },
+      {
+        id:       clientScan2Id,
+        imageUrl: 'offline/scan_solo.jpg',
+        cropType: 'coffee',
+      },
+    ],
+  };
+
+  const sync1 = await post(SY, '/upload', payload, token);
+  check('200 on valid upload',              sync1.status === 200,          `got ${sync1.status}`);
+  check('1 farm synced',                    sync1.body.syncedCounts?.farms === 1);
+  check('2 scans synced',                   sync1.body.syncedCounts?.scans === 2);
+  check('0 farms skipped',                  sync1.body.skipped?.farms === 0);
+  check('0 scans skipped',                  sync1.body.skipped?.scans === 0);
+  check('serverTimestamp present',          typeof sync1.body.serverTimestamp === 'string');
+  check('conflicts array present',          Array.isArray(sync1.body.conflicts));
+
+  // Verify farm-scan linkage was resolved correctly
+  const dbSyncScan = await prisma.scan.findUnique({ where: { id: clientScanId } });
+  check('scan linked to synced farm',       dbSyncScan?.farmId === clientFarmId);
+
+  // Idempotency: resend the exact same payload — everything should be skipped
+  const sync2 = await post(SY, '/upload', payload, token);
+  check('200 on duplicate upload',          sync2.status === 200,          `got ${sync2.status}`);
+  check('0 farms synced (idempotent)',       sync2.body.syncedCounts?.farms === 0);
+  check('0 scans synced (idempotent)',       sync2.body.syncedCounts?.scans === 0);
+  check('1 farm skipped',                   sync2.body.skipped?.farms === 1);
+  check('2 scans skipped',                  sync2.body.skipped?.scans === 2);
+
+  // Invalid items: missing required fields and bad cropType
+  const badPayload = {
+    deviceId,
+    farms: [
+      { id: randomUUID(), name: 'No CropType' },          // missing cropType
+      { id: randomUUID(), name: 'Bad Crop', cropType: 'wheat' }, // invalid cropType
+    ],
+    scans: [
+      { id: randomUUID(), cropType: 'maize' },            // missing imageUrl
+    ],
+  };
+  const sync3 = await post(SY, '/upload', badPayload, token);
+  check('200 with all-invalid payload',     sync3.status === 200,          `got ${sync3.status}`);
+  check('0 farms synced (all invalid)',     sync3.body.syncedCounts?.farms === 0);
+  check('conflicts recorded',              (sync3.body.conflicts as unknown[]).length >= 3);
+
+  // Scan referencing a farmId that doesn't exist → stored with null farmId
+  const orphanScanId = randomUUID();
+  const orphanPayload = {
+    deviceId,
+    scans: [{ id: orphanScanId, imageUrl: 'x.jpg', cropType: 'maize', farmId: randomUUID() }],
+  };
+  const sync4 = await post(SY, '/upload', orphanPayload, token);
+  check('200 on scan with bad farmId',      sync4.status === 200,          `got ${sync4.status}`);
+  check('scan synced despite bad farmId',   sync4.body.syncedCounts?.scans === 1);
+  check('conflict recorded for bad farmId', (sync4.body.conflicts as unknown[]).length >= 1);
+  const dbOrphan = await prisma.scan.findUnique({ where: { id: orphanScanId } });
+  check('orphan scan farmId is null in DB', dbOrphan?.farmId === null);
+
+  // ── 25. GET /sync/status ──────────────────────────────────────────────────────
+  section('25 ▸ GET /sync/status');
+
+  check('401 without token', (await get(SY, '/status')).status === 401);
+
+  const statusRes = await get(SY, '/status', token);
+  check('200 on valid request',             statusRes.status === 200,      `got ${statusRes.status}`);
+  check('devices array present',            Array.isArray(statusRes.body.devices));
+  check('serverTimestamp present',          typeof statusRes.body.serverTimestamp === 'string');
+
+  const syncedDevice = (statusRes.body.devices as J[]).find(d => d.deviceId === deviceId);
+  check('synced device in list',            syncedDevice !== undefined);
+  check('lastSyncAt updated after upload',  syncedDevice?.lastSyncAt !== null);
+  check('device has registeredAt',          typeof syncedDevice?.registeredAt === 'string');
+
+  // ── 26. DB SANITY ─────────────────────────────────────────────────────────────
+  section('26 ▸ Database sanity (sync)');
+
+  const dbFarm = await prisma.farm.findUnique({ where: { id: clientFarmId } });
+  check('synced farm exists in DB',         dbFarm !== null);
+  check('synced farm has correct userId',   dbFarm?.userId !== undefined);
+
+  const dbScan2 = await prisma.scan.findUnique({ where: { id: clientScan2Id } });
+  check('standalone scan exists in DB',     dbScan2 !== null);
+  check('standalone scan farmId is null',   dbScan2?.farmId === null);
+
+  const dbDevice = await prisma.device.findUnique({ where: { id: deviceId } });
+  check('device lastSyncAt persisted',      dbDevice?.lastSyncAt !== null);
+}
+
 // ─── Entry point ───────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
   const email      = `__test_${Date.now()}@zaosmart.dev`;
@@ -558,6 +682,14 @@ async function main(): Promise<void> {
     const farmId = await runFarmsTests(farmsToken, otherToken);
     await runScansTests(farmsToken, otherToken, farmId);
     await runDiseasesTests(farmsToken);
+
+    // Login with a dedicated sync-test device to get a stable deviceId
+    const syncLoginRes = await post('/auth', '/login', {
+      email,
+      password: 'Test@Secure99',
+      deviceName: 'Sync Test Device',
+    });
+    await runSyncTests(farmsToken, syncLoginRes.body.deviceId as string);
   } finally {
     await prisma.user.deleteMany({ where: { email: { in: [email, otherEmail] } } });
     await prisma.$disconnect();

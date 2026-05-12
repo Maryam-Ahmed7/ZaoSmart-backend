@@ -3,6 +3,7 @@ import authRouter from './routes/auth.routes';
 import farmsRouter from './routes/farms.routes';
 import scansRouter from './routes/scans.routes';
 import diseasesRouter from './routes/diseases.routes';
+import syncRouter from './routes/sync.routes';
 
 const app = express();
 
@@ -12,6 +13,7 @@ app.use('/auth', authRouter);
 app.use('/farms', farmsRouter);
 app.use('/scans', scansRouter);
 app.use('/diseases', diseasesRouter);
+app.use('/sync', syncRouter);
 
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
