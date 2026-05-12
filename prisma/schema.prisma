@@ -17,6 +17,7 @@ model User {
   farms         Farm[]
   scans         Scan[]
   reminders     Reminder[]
+  subscription  Subscription?
 }
 
 model Device {
@@ -113,4 +114,20 @@ model Reminder {
   @@index([userId])
   @@index([farmId])
   @@index([date])
+}
+
+model Subscription {
+  id         String    @id @default(uuid())
+  userId     String    @unique
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan       String    @default("free")
+  status     String    @default("active")
+  startDate  DateTime  @default(now())
+  expiryDate DateTime?
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([status])
+  @@index([expiryDate])
 }

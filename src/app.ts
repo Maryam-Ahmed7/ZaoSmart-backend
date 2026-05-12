@@ -5,6 +5,7 @@ import scansRouter from './routes/scans.routes';
 import diseasesRouter from './routes/diseases.routes';
 import syncRouter from './routes/sync.routes';
 import remindersRouter from './routes/reminders.routes';
+import subscriptionRouter from './routes/subscription.routes';
 
 const app = express();
 
@@ -16,6 +17,7 @@ app.use('/scans', scansRouter);
 app.use('/diseases', diseasesRouter);
 app.use('/sync', syncRouter);
 app.use('/reminders', remindersRouter);
+app.use('/subscription', subscriptionRouter);
 
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

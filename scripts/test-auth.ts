@@ -785,6 +785,104 @@ async function runRemindersTests(token: string, otherToken: string, farmId: stri
   check('deleted reminder gone from DB', !(await prisma.reminder.findUnique({ where: { id: r2.body.id as string } })));
 }
 
+// ─── Subscription tests ────────────────────────────────────────────────────────
+async function runSubscriptionTests(token: string, otherToken: string): Promise<void> {
+  const SUB = '/subscription';
+
+  // ── 33. GET /subscription/me (free user, no record yet) ───────────────────────
+  section('33 ▸ GET /subscription/me — free user');
+
+  check('401 without token', (await get(SUB, '/me')).status === 401);
+
+  const freeMe = await get(SUB, '/me', token);
+  check('200 for user with no subscription',  freeMe.status === 200,        `got ${freeMe.status}`);
+  check('plan defaults to free',              freeMe.body.plan === 'free');
+  check('status defaults to active',          freeMe.body.status === 'active');
+  check('isActive is true',                   freeMe.body.isActive === true);
+  check('expiryDate is null (free plan)',      freeMe.body.expiryDate === null);
+  check('no DB record created yet',           !(await prisma.subscription.findUnique({
+    where: { userId: (freeMe.body.userId as string) },
+  })));
+
+  // Other user also starts free
+  const otherFree = await get(SUB, '/me', otherToken);
+  check('other user also starts free',        otherFree.body.plan === 'free');
+
+  // ── 34. GET /subscription/status ─────────────────────────────────────────────
+  section('34 ▸ GET /subscription/status');
+
+  check('401 without token',                  (await get(SUB, '/status')).status === 401);
+  const statusRes = await get(SUB, '/status', token);
+  check('200 on /status',                     statusRes.status === 200,     `got ${statusRes.status}`);
+  check('/status returns same data as /me',   statusRes.body.plan === freeMe.body.plan);
+
+  // ── 35. POST /subscription/activate ──────────────────────────────────────────
+  section('35 ▸ POST /subscription/activate');
+
+  check('401 without token',                  (await post(SUB, '/activate', {})).status === 401);
+
+  const activated = await post(SUB, '/activate', {}, token);
+  check('200 on activation',                  activated.status === 200,     `got ${activated.status}`);
+  check('plan is now premium',                activated.body.plan === 'premium');
+  check('status is active',                   activated.body.status === 'active');
+  check('isActive is true',                   activated.body.isActive === true);
+  check('startDate is set',                   typeof activated.body.startDate === 'string');
+  check('expiryDate is set (+30 days)',        typeof activated.body.expiryDate === 'string');
+  check('userId matches',                     typeof activated.body.userId === 'string');
+
+  // Expiry should be ~30 days from now
+  const expiry  = new Date(activated.body.expiryDate as string).getTime();
+  const now     = Date.now();
+  const diff    = expiry - now;
+  const days    = diff / (1000 * 60 * 60 * 24);
+  check('expiryDate is ~30 days ahead',       days > 29 && days <= 31);
+
+  // GET /me now returns premium
+  const premiumMe = await get(SUB, '/me', token);
+  check('/me reflects premium after activate', premiumMe.body.plan === 'premium');
+
+  // Re-activating resets the window (idempotent/safe)
+  const reActivated = await post(SUB, '/activate', {}, token);
+  check('200 on re-activation',               reActivated.status === 200,   `got ${reActivated.status}`);
+  check('still premium after re-activation',  reActivated.body.plan === 'premium');
+
+  // ── 36. POST /subscription/cancel ────────────────────────────────────────────
+  section('36 ▸ POST /subscription/cancel');
+
+  check('401 without token',                  (await post(SUB, '/cancel', {})).status === 401);
+
+  // Free user (otherToken) cannot cancel — nothing to cancel
+  const cancelFree = await post(SUB, '/cancel', {}, otherToken);
+  check('400 on cancel with no subscription', cancelFree.status === 400,    `got ${cancelFree.status}`);
+
+  const cancelled = await post(SUB, '/cancel', {}, token);
+  check('200 on cancel',                      cancelled.status === 200,     `got ${cancelled.status}`);
+  check('status is cancelled',                cancelled.body.status === 'cancelled');
+  check('isActive is false',                  cancelled.body.isActive === false);
+  check('plan still shows premium',           cancelled.body.plan === 'premium');
+
+  // Cannot cancel again once already cancelled
+  const doubleCancel = await post(SUB, '/cancel', {}, token);
+  check('400 on double cancel',               doubleCancel.status === 400,  `got ${doubleCancel.status}`);
+
+  // GET /me reflects cancelled state
+  const cancelledMe = await get(SUB, '/me', token);
+  check('/me reflects cancelled state',       cancelledMe.body.status === 'cancelled');
+  check('isActive false in /me',              cancelledMe.body.isActive === false);
+
+  // ── 37. DB SANITY ─────────────────────────────────────────────────────────────
+  section('37 ▸ Database sanity (subscription)');
+
+  const dbSub = await prisma.subscription.findUnique({
+    where: { userId: activated.body.userId as string },
+  });
+  check('subscription record exists in DB',   dbSub !== null);
+  check('plan is premium in DB',              dbSub?.plan === 'premium');
+  check('status is cancelled in DB',          dbSub?.status === 'cancelled');
+  check('isActive is false in DB',            dbSub?.isActive === false);
+  check('expiryDate persisted in DB',         dbSub?.expiryDate !== null);
+}
+
 // ─── Entry point ───────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
   const email      = `__test_${Date.now()}@zaosmart.dev`;
@@ -821,6 +919,7 @@ async function main(): Promise<void> {
     });
     await runSyncTests(farmsToken, syncLoginRes.body.deviceId as string);
     await runRemindersTests(farmsToken, otherToken, farmId);
+    await runSubscriptionTests(farmsToken, otherToken);
   } finally {
     await prisma.user.deleteMany({ where: { email: { in: [email, otherEmail] } } });
     await prisma.$disconnect();
