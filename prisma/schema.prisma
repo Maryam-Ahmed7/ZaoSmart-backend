@@ -16,6 +16,7 @@ model User {
   refreshTokens RefreshToken[]
   farms         Farm[]
   scans         Scan[]
+  reminders     Reminder[]
 }
 
 model Device {
@@ -51,6 +52,7 @@ model Farm {
   size         Float?
   plantingDate DateTime?
   scans        Scan[]
+  reminders    Reminder[]
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -92,4 +94,23 @@ model Disease {
   updatedAt   DateTime @updatedAt
 
   @@index([cropType])
+}
+
+model Reminder {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  farmId      String?
+  farm        Farm?     @relation(fields: [farmId], references: [id], onDelete: SetNull)
+  title       String
+  description String?
+  type        String
+  date        DateTime
+  isCompleted Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([farmId])
+  @@index([date])
 }

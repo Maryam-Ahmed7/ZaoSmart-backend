@@ -655,6 +655,136 @@ async function runSyncTests(token: string, deviceId: string): Promise<void> {
   check('device lastSyncAt persisted',      dbDevice?.lastSyncAt !== null);
 }
 
+// ─── Reminders tests ───────────────────────────────────────────────────────────
+async function runRemindersTests(token: string, otherToken: string, farmId: string): Promise<void> {
+  const R = '/reminders';
+
+  const futureDate  = new Date(Date.now() + 7  * 24 * 60 * 60 * 1000).toISOString(); // +7 days
+  const nearDate    = new Date(Date.now() + 1  * 24 * 60 * 60 * 1000).toISOString(); // +1 day
+  const pastDate    = new Date(Date.now() - 3  * 24 * 60 * 60 * 1000).toISOString(); // -3 days
+
+  // ── 27. POST /reminders ───────────────────────────────────────────────────────
+  section('27 ▸ POST /reminders');
+
+  check('401 without token', (await post(R, '/', { title: 'x', type: 'watering', date: futureDate })).status === 401);
+
+  const r1 = await post(R, '/', {
+    title:       'Spray maize field',
+    type:        'spraying',
+    date:        futureDate,
+    farmId,
+    description: 'Apply fungicide after rain',
+  }, token);
+  check('201 on valid create',           r1.status === 201,          `got ${r1.status}`);
+  check('returns id',                    typeof r1.body.id === 'string');
+  check('userId set from token',         typeof r1.body.userId === 'string');
+  check('farmId stored correctly',       r1.body.farmId === farmId);
+  check('isCompleted defaults false',    r1.body.isCompleted === false);
+  check('description stored',            r1.body.description === 'Apply fungicide after rain');
+
+  const r2 = await post(R, '/', { title: 'Water seedlings', type: 'watering', date: nearDate }, token);
+  check('201 with only required fields', r2.status === 201,          `got ${r2.status}`);
+  check('farmId null when not provided', r2.body.farmId === null);
+
+  const r3 = await post(R, '/', { title: 'Old task', type: 'inspection', date: pastDate }, token);
+  check('201 with past date',            r3.status === 201,          `got ${r3.status}`);
+
+  const rBadType = await post(R, '/', { title: 'X', type: 'plowing', date: futureDate }, token);
+  check('400 on invalid type',           rBadType.status === 400,    `got ${rBadType.status}`);
+
+  const rBadDate = await post(R, '/', { title: 'X', type: 'watering', date: 'not-a-date' }, token);
+  check('400 on invalid date',           rBadDate.status === 400,    `got ${rBadDate.status}`);
+
+  const rMissing = await post(R, '/', { title: 'X' }, token);
+  check('400 on missing required fields', rMissing.status === 400,   `got ${rMissing.status}`);
+
+  const rBadFarm = await post(R, '/', {
+    title: 'X', type: 'watering', date: futureDate,
+    farmId: '00000000-0000-0000-0000-000000000000',
+  }, token);
+  check('404 on non-owned farmId',       rBadFarm.status === 404,    `got ${rBadFarm.status}`);
+
+  const reminderId = r1.body.id as string;
+
+  // ── 28. GET /reminders ────────────────────────────────────────────────────────
+  section('28 ▸ GET /reminders');
+
+  check('401 without token', (await get(R, '/')).status === 401);
+
+  const listAll = await get(R, '/', token);
+  check('200 returns array',             listAll.status === 200 && Array.isArray(listAll.body));
+  check('own reminders returned',        (listAll.body as unknown[]).length >= 3);
+  check('ordered by date asc',           (() => {
+    const dates = (listAll.body as J[]).map(r => new Date(r.date as string).getTime());
+    return dates.every((d, i) => i === 0 || d >= dates[i - 1]);
+  })());
+
+  const otherList = await get(R, '/', otherToken);
+  check('other user sees empty list',    (otherList.body as unknown[]).length === 0);
+
+  const listByFarm = await get(R, `/?farmId=${farmId}`, token);
+  check('farmId filter works',           (listByFarm.body as J[]).every(r => r.farmId === farmId));
+
+  const listByType = await get(R, '/?type=watering', token);
+  check('type filter works',             (listByType.body as J[]).every(r => r.type === 'watering'));
+
+  const listBadType = await get(R, '/?type=plowing', token);
+  check('400 on invalid type filter',    listBadType.status === 400, `got ${listBadType.status}`);
+
+  // Date range: only reminders in the next 2 days
+  const from = new Date().toISOString();
+  const to   = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+  const listByRange = await get(R, `/?dateFrom=${from}&dateTo=${to}`, token);
+  check('date range filter works',       (listByRange.body as J[]).length >= 1);
+  check('range excludes past reminder',  !(listByRange.body as J[]).find(r => r.id === r3.body.id));
+  check('400 on invalid dateFrom',       (await get(R, '/?dateFrom=bad-date', token)).status === 400);
+
+  // ── 29. GET /reminders/:id ────────────────────────────────────────────────────
+  section('29 ▸ GET /reminders/:id');
+
+  const single = await get(R, `/${reminderId}`, token);
+  check('200 on own reminder',           single.status === 200,      `got ${single.status}`);
+  check('correct reminder returned',     single.body.id === reminderId);
+
+  check('401 without token',             (await get(R, `/${reminderId}`)).status === 401);
+  check('404 on other user\'s reminder', (await get(R, `/${reminderId}`, otherToken)).status === 404);
+  check('404 on nonexistent id',         (await get(R, '/00000000-0000-0000-0000-000000000000', token)).status === 404);
+
+  // ── 30. PUT /reminders/:id ────────────────────────────────────────────────────
+  section('30 ▸ PUT /reminders/:id');
+
+  const upd = await put(R, `/${reminderId}`, { title: 'Updated spray task', isCompleted: true }, token);
+  check('200 on valid update',           upd.status === 200,         `got ${upd.status}`);
+  check('title updated',                 upd.body.title === 'Updated spray task');
+  check('isCompleted updated to true',   upd.body.isCompleted === true);
+  check('farmId unchanged',              upd.body.farmId === farmId);
+
+  const updBadType = await put(R, `/${reminderId}`, { type: 'plowing' }, token);
+  check('400 on invalid type',           updBadType.status === 400,  `got ${updBadType.status}`);
+
+  check('401 without token',             (await put(R, `/${reminderId}`, { title: 'X' }, 'bad')).status === 401);
+  check('404 on other user\'s reminder', (await put(R, `/${reminderId}`, { title: 'X' }, otherToken)).status === 404);
+
+  // ── 31. DELETE /reminders/:id ─────────────────────────────────────────────────
+  section('31 ▸ DELETE /reminders/:id');
+
+  check('404 on other user\'s reminder', (await del(R, `/${r2.body.id as string}`, otherToken)).status === 404);
+  check('401 without token',             (await del(R, `/${r2.body.id as string}`, 'bad')).status === 401);
+
+  const gone = await del(R, `/${r2.body.id as string}`, token);
+  check('204 on own reminder delete',    gone.status === 204,        `got ${gone.status}`);
+  check('404 after deletion',            (await get(R, `/${r2.body.id as string}`, token)).status === 404);
+
+  // ── 32. DB SANITY ─────────────────────────────────────────────────────────────
+  section('32 ▸ Database sanity (reminders)');
+
+  const dbReminder = await prisma.reminder.findUnique({ where: { id: reminderId } });
+  check('reminder exists in DB',         dbReminder !== null);
+  check('isCompleted persisted',         dbReminder?.isCompleted === true);
+  check('farmId persisted',              dbReminder?.farmId === farmId);
+  check('deleted reminder gone from DB', !(await prisma.reminder.findUnique({ where: { id: r2.body.id as string } })));
+}
+
 // ─── Entry point ───────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
   const email      = `__test_${Date.now()}@zaosmart.dev`;
@@ -690,6 +820,7 @@ async function main(): Promise<void> {
       deviceName: 'Sync Test Device',
     });
     await runSyncTests(farmsToken, syncLoginRes.body.deviceId as string);
+    await runRemindersTests(farmsToken, otherToken, farmId);
   } finally {
     await prisma.user.deleteMany({ where: { email: { in: [email, otherEmail] } } });
     await prisma.$disconnect();
