@@ -13,9 +13,27 @@ function handleError(err: unknown, res: Response, next: NextFunction): void {
   next(err);
 }
 
+// Shape returned to frontend — matches FarmDto in farms.api.ts
+function toDto(farm: {
+  id: string; name: string; cropType: string;
+  location: string | null; sizeHa: number | null; notes: string | null;
+  createdAt: Date; updatedAt: Date;
+}) {
+  return {
+    id:        farm.id,
+    name:      farm.name,
+    cropType:  farm.cropType,
+    location:  farm.location  ?? undefined,
+    sizeHa:    farm.sizeHa    ?? undefined,
+    notes:     farm.notes     ?? undefined,
+    createdAt: farm.createdAt.toISOString(),
+    updatedAt: farm.updatedAt.toISOString(),
+  };
+}
+
 export async function create(req: Request, res: Response, next: NextFunction): Promise<void> {
   const userId = (req as AuthRequest).userId;
-  const { name, cropType, region, size, plantingDate } = req.body ?? {};
+  const { name, cropType, location, sizeHa, notes } = req.body ?? {};
 
   if (!name || !cropType) {
     res.status(400).json({ error: 'name and cropType are required' });
@@ -27,8 +45,8 @@ export async function create(req: Request, res: Response, next: NextFunction): P
   }
 
   try {
-    const farm = await farmsService.createFarm(userId, { name, cropType, region, size, plantingDate });
-    res.status(201).json(farm);
+    const farm = await farmsService.createFarm(userId, { name, cropType, location, sizeHa, notes });
+    res.status(201).json(toDto(farm));
   } catch (err) {
     handleError(err, res, next);
   }
@@ -38,7 +56,7 @@ export async function list(req: Request, res: Response, next: NextFunction): Pro
   const userId = (req as AuthRequest).userId;
   try {
     const farms = await farmsService.listFarms(userId);
-    res.json(farms);
+    res.json(farms.map(toDto));
   } catch (err) {
     next(err);
   }
@@ -49,7 +67,7 @@ export async function getOne(req: Request, res: Response, next: NextFunction): P
   const farmId = req.params.id as string;
   try {
     const farm = await farmsService.getFarm(userId, farmId);
-    res.json(farm);
+    res.json(toDto(farm));
   } catch (err) {
     handleError(err, res, next);
   }
@@ -58,7 +76,7 @@ export async function getOne(req: Request, res: Response, next: NextFunction): P
 export async function update(req: Request, res: Response, next: NextFunction): Promise<void> {
   const userId = (req as AuthRequest).userId;
   const farmId = req.params.id as string;
-  const { name, cropType, region, size, plantingDate } = req.body ?? {};
+  const { name, cropType, location, sizeHa, notes } = req.body ?? {};
 
   if (cropType !== undefined && !VALID_CROP_TYPES.includes(cropType)) {
     res.status(400).json({ error: `cropType must be one of: ${VALID_CROP_TYPES.join(', ')}` });
@@ -66,10 +84,8 @@ export async function update(req: Request, res: Response, next: NextFunction): P
   }
 
   try {
-    const farm = await farmsService.updateFarm(userId, farmId, {
-      name, cropType, region, size, plantingDate,
-    });
-    res.json(farm);
+    const farm = await farmsService.updateFarm(userId, farmId, { name, cropType, location, sizeHa, notes });
+    res.json(toDto(farm));
   } catch (err) {
     handleError(err, res, next);
   }

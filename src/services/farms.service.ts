@@ -8,31 +8,34 @@ export class FarmError extends Error {
 }
 
 type CreateData = {
-  name: string;
+  name:     string;
   cropType: string;
-  region?: string | null;
-  size?: number | null;
-  plantingDate?: string | null;
+  location?: string | null;
+  sizeHa?:  number | null;
+  notes?:   string | null;
 };
 
 type UpdateData = Partial<CreateData>;
 
 export async function createFarm(userId: string, data: CreateData) {
-  return prisma.farm.create({
+  console.log('[FarmsService] CREATE_FARM', { userId, name: data.name, cropType: data.cropType });
+  const farm = await prisma.farm.create({
     data: {
       userId,
-      name: data.name,
+      name:     data.name,
       cropType: data.cropType,
-      region: data.region ?? null,
-      size: data.size ?? null,
-      plantingDate: data.plantingDate ? new Date(data.plantingDate) : null,
+      location: data.location ?? null,
+      sizeHa:   data.sizeHa   ?? null,
+      notes:    data.notes    ?? null,
     },
   });
+  console.log('[FarmsService] FARM_CREATED', { id: farm.id, userId });
+  return farm;
 }
 
 export async function listFarms(userId: string) {
   return prisma.farm.findMany({
-    where: { userId },
+    where:   { userId },
     orderBy: { createdAt: 'desc' },
   });
 }
@@ -50,13 +53,11 @@ export async function updateFarm(userId: string, farmId: string, data: UpdateDat
   return prisma.farm.update({
     where: { id: farmId },
     data: {
-      ...(data.name !== undefined        && { name: data.name }),
-      ...(data.cropType !== undefined    && { cropType: data.cropType }),
-      ...(data.region !== undefined      && { region: data.region }),
-      ...(data.size !== undefined        && { size: data.size }),
-      ...(data.plantingDate !== undefined && {
-        plantingDate: data.plantingDate ? new Date(data.plantingDate) : null,
-      }),
+      ...(data.name     !== undefined && { name:     data.name }),
+      ...(data.cropType !== undefined && { cropType: data.cropType }),
+      ...(data.location !== undefined && { location: data.location }),
+      ...(data.sizeHa   !== undefined && { sizeHa:   data.sizeHa }),
+      ...(data.notes    !== undefined && { notes:    data.notes }),
     },
   });
 }

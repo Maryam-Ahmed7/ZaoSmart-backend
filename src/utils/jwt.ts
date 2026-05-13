@@ -2,7 +2,7 @@ import jwt from 'jsonwebtoken';
 
 export interface AccessTokenPayload {
   userId: string;
-  email: string;
+  phone:  string;
 }
 
 export function signAccessToken(payload: AccessTokenPayload): string {

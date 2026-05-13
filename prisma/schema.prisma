@@ -8,8 +8,10 @@ datasource db {
 
 model User {
   id            String         @id @default(uuid())
-  email         String         @unique
-  passwordHash  String
+  phone         String         @unique
+  name          String
+  countryCode   String         @default("")
+  language      String         @default("en")
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   devices       Device[]
@@ -22,7 +24,7 @@ model User {
 
 model Device {
   id            String         @id @default(uuid())
-  name          String
+  name          String         // stores the client deviceId UUID
   userId        String
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   refreshTokens RefreshToken[]
@@ -44,18 +46,18 @@ model RefreshToken {
 }
 
 model Farm {
-  id           String    @id @default(uuid())
-  userId       String
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name         String
-  cropType     String
-  region       String?
-  size         Float?
-  plantingDate DateTime?
-  scans        Scan[]
-  reminders    Reminder[]
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id        String     @id @default(uuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  cropType  String
+  location  String?
+  sizeHa    Float?
+  notes     String?
+  scans     Scan[]
+  reminders Reminder[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 
   @@index([userId])
 }
@@ -68,10 +70,12 @@ model Scan {
   farm             Farm?    @relation(fields: [farmId], references: [id], onDelete: SetNull)
   diseaseId        String?
   disease          Disease? @relation(fields: [diseaseId], references: [id], onDelete: SetNull)
-  imageUrl         String
   cropType         String
   predictedDisease String?
   confidence       Float?
+  confidenceTier   String?
+  severity         String?
+  isPremiumResult  Boolean  @default(false)
   notes            String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -98,22 +102,22 @@ model Disease {
 }
 
 model Reminder {
-  id          String    @id @default(uuid())
+  id          String   @id @default(uuid())
   userId      String
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   farmId      String?
-  farm        Farm?     @relation(fields: [farmId], references: [id], onDelete: SetNull)
+  farm        Farm?    @relation(fields: [farmId], references: [id], onDelete: SetNull)
+  cropId      String?
   title       String
-  description String?
-  type        String
-  date        DateTime
-  isCompleted Boolean   @default(false)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  scheduledAt DateTime
+  isCompleted Boolean  @default(false)
+  recurrence  String?  // "daily" | "weekly" | "none" | null
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([userId])
   @@index([farmId])
-  @@index([date])
+  @@index([scheduledAt])
 }
 
 model Subscription {

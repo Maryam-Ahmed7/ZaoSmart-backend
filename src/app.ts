@@ -11,12 +11,21 @@ const app = express();
 
 app.use(express.json());
 
-app.use('/auth', authRouter);
-app.use('/farms', farmsRouter);
-app.use('/scans', scansRouter);
-app.use('/diseases', diseasesRouter);
-app.use('/sync', syncRouter);
-app.use('/reminders', remindersRouter);
+// ─── Request logger ───────────────────────────────────────────────────────────
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  const body = req.body && Object.keys(req.body).length
+    ? JSON.stringify(req.body).slice(0, 200)
+    : '(no body)';
+  console.log(`[HTTP] ${req.method} ${req.path} — ${body}`);
+  next();
+});
+
+app.use('/auth',         authRouter);
+app.use('/farms',        farmsRouter);
+app.use('/scans',        scansRouter);
+app.use('/diseases',     diseasesRouter);
+app.use('/sync',         syncRouter);
+app.use('/reminders',    remindersRouter);
 app.use('/subscription', subscriptionRouter);
 
 app.get('/health', (_req: Request, res: Response) => {
@@ -32,7 +41,7 @@ app.use((err: Error & { statusCode?: number }, _req: Request, res: Response, _ne
     res.status(err.statusCode).json({ error: err.message });
     return;
   }
-  console.error(err.stack);
+  console.error('[ERROR]', err.stack);
   res.status(500).json({ error: 'Internal server error' });
 });
 

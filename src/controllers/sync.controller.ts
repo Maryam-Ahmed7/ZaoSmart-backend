@@ -13,7 +13,7 @@ function handleError(err: unknown, res: Response, next: NextFunction): void {
 
 export async function upload(req: Request, res: Response, next: NextFunction): Promise<void> {
   const userId = (req as AuthRequest).userId;
-  const { deviceId, farms, scans } = req.body ?? {};
+  const { deviceId, farms, scans, reminders } = req.body ?? {};
 
   if (!deviceId || typeof deviceId !== 'string') {
     res.status(400).json({ error: 'deviceId is required' });
@@ -21,7 +21,7 @@ export async function upload(req: Request, res: Response, next: NextFunction): P
   }
 
   try {
-    const result = await syncService.uploadSync(userId, deviceId, { farms, scans });
+    const result = await syncService.uploadSync(userId, deviceId, { farms, scans, reminders });
     res.json(result);
   } catch (err) {
     handleError(err, res, next);

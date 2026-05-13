@@ -8,22 +8,23 @@ function handleAuthError(err: unknown, res: Response, next: NextFunction): void 
     res.status(err.statusCode).json({ error: err.message });
     return;
   }
-  // Prisma unique constraint violation
-  if ((err as any)?.code === 'P2002') {
-    res.status(409).json({ error: 'Email already in use' });
-    return;
-  }
   next(err);
 }
 
 export async function register(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const { email, password, deviceName } = req.body ?? {};
-  if (!email || !password || !deviceName) {
-    res.status(400).json({ error: 'email, password, and deviceName are required' });
+  const { phone, name, countryCode, language, deviceId } = req.body ?? {};
+  if (!phone || !name || !deviceId) {
+    res.status(400).json({ error: 'phone, name, and deviceId are required' });
     return;
   }
   try {
-    const result = await authService.register({ email, password, deviceName });
+    const result = await authService.register({
+      phone,
+      name,
+      countryCode: countryCode ?? '',
+      language:    language    ?? 'en',
+      deviceId,
+    });
     res.status(201).json(result);
   } catch (err) {
     handleAuthError(err, res, next);
@@ -31,13 +32,13 @@ export async function register(req: Request, res: Response, next: NextFunction):
 }
 
 export async function login(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const { email, password, deviceName } = req.body ?? {};
-  if (!email || !password || !deviceName) {
-    res.status(400).json({ error: 'email, password, and deviceName are required' });
+  const { phone, deviceId } = req.body ?? {};
+  if (!phone || !deviceId) {
+    res.status(400).json({ error: 'phone and deviceId are required' });
     return;
   }
   try {
-    const result = await authService.login({ email, password, deviceName });
+    const result = await authService.login({ phone, deviceId });
     res.json(result);
   } catch (err) {
     handleAuthError(err, res, next);
@@ -76,6 +77,17 @@ export async function me(req: Request, res: Response, next: NextFunction): Promi
   try {
     const user = await authService.getMe((req as AuthRequest).userId);
     res.json(user);
+  } catch (err) {
+    handleAuthError(err, res, next);
+  }
+}
+
+// Returns user profile + subscription in a single call — used for cross-device
+// session restoration after login.
+export async function restore(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = await authService.restore((req as AuthRequest).userId);
+    res.json(result);
   } catch (err) {
     handleAuthError(err, res, next);
   }

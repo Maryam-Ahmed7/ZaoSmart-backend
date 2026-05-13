@@ -8,16 +8,19 @@ export class ScanError extends Error {
 }
 
 type CreateData = {
-  imageUrl: string;
-  cropType: string;
-  farmId?: string | null;
+  cropType:         string;
   predictedDisease?: string | null;
-  confidence?: number | null;
-  notes?: string | null;
+  diseaseId?:       string | null;
+  farmId?:          string | null;
+  confidence?:      number | null;
+  confidenceTier?:  string | null;
+  severity?:        string | null;
+  isPremiumResult?: boolean;
+  notes?:           string | null;
 };
 
 type ListFilters = {
-  farmId?: string;
+  farmId?:   string;
   cropType?: string;
 };
 
@@ -29,11 +32,11 @@ export async function createScan(userId: string, data: CreateData) {
     if (!farm) throw new ScanError(404, 'Farm not found');
   }
 
-  // Resolve disease from AI prediction via case-insensitive name match
-  let diseaseId: string | null = null;
-  if (data.predictedDisease) {
+  // Prefer explicit diseaseId; fall back to name lookup for backward compat
+  let diseaseId = data.diseaseId ?? null;
+  if (!diseaseId && data.predictedDisease) {
     const match = await prisma.disease.findFirst({
-      where: { name: { equals: data.predictedDisease, mode: 'insensitive' } },
+      where:  { name: { equals: data.predictedDisease, mode: 'insensitive' } },
       select: { id: true },
     });
     diseaseId = match?.id ?? null;
@@ -42,13 +45,15 @@ export async function createScan(userId: string, data: CreateData) {
   return prisma.scan.create({
     data: {
       userId,
-      farmId:           data.farmId ?? null,
+      farmId:           data.farmId           ?? null,
       diseaseId,
-      imageUrl:         data.imageUrl,
       cropType:         data.cropType,
-      predictedDisease: data.predictedDisease ?? null,
-      confidence:       data.confidence ?? null,
-      notes:            data.notes ?? null,
+      predictedDisease: data.predictedDisease  ?? null,
+      confidence:       data.confidence        ?? null,
+      confidenceTier:   data.confidenceTier    ?? null,
+      severity:         data.severity          ?? null,
+      isPremiumResult:  data.isPremiumResult   ?? false,
+      notes:            data.notes             ?? null,
     },
     include: DISEASE_INCLUDE,
   });
@@ -58,7 +63,7 @@ export async function listScans(userId: string, filters: ListFilters) {
   return prisma.scan.findMany({
     where: {
       userId,
-      ...(filters.farmId   ? { farmId: filters.farmId }     : {}),
+      ...(filters.farmId   ? { farmId:   filters.farmId }   : {}),
       ...(filters.cropType ? { cropType: filters.cropType } : {}),
     },
     include: DISEASE_INCLUDE,
@@ -68,7 +73,7 @@ export async function listScans(userId: string, filters: ListFilters) {
 
 export async function getScan(userId: string, scanId: string) {
   const scan = await prisma.scan.findFirst({
-    where: { id: scanId, userId },
+    where:   { id: scanId, userId },
     include: DISEASE_INCLUDE,
   });
   if (!scan) throw new ScanError(404, 'Scan not found');

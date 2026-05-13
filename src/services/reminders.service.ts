@@ -8,40 +8,43 @@ export class ReminderError extends Error {
 }
 
 type CreateData = {
-  title: string;
-  type: string;
-  date: string;
-  farmId?: string | null;
-  description?: string | null;
+  title:       string;
+  scheduledAt: string;
+  cropId?:     string | null;
+  farmId?:     string | null;
+  recurrence?: string | null;
   isCompleted?: boolean;
 };
 
 type UpdateData = Partial<CreateData>;
 
 type ListFilters = {
-  farmId?: string;
-  type?: string;
+  farmId?:   string;
+  cropId?:   string;
   dateFrom?: string;
-  dateTo?: string;
+  dateTo?:   string;
 };
 
 export async function createReminder(userId: string, data: CreateData) {
+  console.log('[RemindersService] CREATE_REMINDER', { userId, title: data.title, scheduledAt: data.scheduledAt });
   if (data.farmId) {
     const farm = await prisma.farm.findFirst({ where: { id: data.farmId, userId } });
     if (!farm) throw new ReminderError(404, 'Farm not found');
   }
 
-  return prisma.reminder.create({
+  const reminder = await prisma.reminder.create({
     data: {
       userId,
-      farmId:      data.farmId ?? null,
       title:       data.title,
-      description: data.description ?? null,
-      type:        data.type,
-      date:        new Date(data.date),
+      scheduledAt: new Date(data.scheduledAt),
+      cropId:      data.cropId      ?? null,
+      farmId:      data.farmId      ?? null,
+      recurrence:  data.recurrence  ?? null,
       isCompleted: data.isCompleted ?? false,
     },
   });
+  console.log('[RemindersService] REMINDER_CREATED', { id: reminder.id, userId });
+  return reminder;
 }
 
 export async function listReminders(userId: string, filters: ListFilters) {
@@ -49,15 +52,15 @@ export async function listReminders(userId: string, filters: ListFilters) {
     where: {
       userId,
       ...(filters.farmId ? { farmId: filters.farmId } : {}),
-      ...(filters.type   ? { type: filters.type }     : {}),
+      ...(filters.cropId ? { cropId: filters.cropId } : {}),
       ...(filters.dateFrom || filters.dateTo ? {
-        date: {
+        scheduledAt: {
           ...(filters.dateFrom ? { gte: new Date(filters.dateFrom) } : {}),
           ...(filters.dateTo   ? { lte: new Date(filters.dateTo)   } : {}),
         },
       } : {}),
     },
-    orderBy: { date: 'asc' },
+    orderBy: { scheduledAt: 'asc' },
   });
 }
 
@@ -71,7 +74,7 @@ export async function updateReminder(userId: string, reminderId: string, data: U
   const reminder = await prisma.reminder.findFirst({ where: { id: reminderId, userId } });
   if (!reminder) throw new ReminderError(404, 'Reminder not found');
 
-  if (data.farmId !== undefined && data.farmId !== null) {
+  if (data.farmId) {
     const farm = await prisma.farm.findFirst({ where: { id: data.farmId, userId } });
     if (!farm) throw new ReminderError(404, 'Farm not found');
   }
@@ -79,11 +82,11 @@ export async function updateReminder(userId: string, reminderId: string, data: U
   return prisma.reminder.update({
     where: { id: reminderId },
     data: {
-      ...(data.title       !== undefined && { title: data.title }),
-      ...(data.description !== undefined && { description: data.description }),
-      ...(data.type        !== undefined && { type: data.type }),
-      ...(data.date        !== undefined && { date: new Date(data.date) }),
-      ...(data.farmId      !== undefined && { farmId: data.farmId }),
+      ...(data.title       !== undefined && { title:       data.title }),
+      ...(data.scheduledAt !== undefined && { scheduledAt: new Date(data.scheduledAt) }),
+      ...(data.cropId      !== undefined && { cropId:      data.cropId }),
+      ...(data.farmId      !== undefined && { farmId:      data.farmId }),
+      ...(data.recurrence  !== undefined && { recurrence:  data.recurrence }),
       ...(data.isCompleted !== undefined && { isCompleted: data.isCompleted }),
     },
   });
