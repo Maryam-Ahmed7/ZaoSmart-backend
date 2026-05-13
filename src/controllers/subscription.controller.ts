@@ -15,9 +15,20 @@ export async function getMe(req: Request, res: Response, next: NextFunction): Pr
   const userId = (req as AuthRequest).userId;
   try {
     const sub = await subscriptionService.getSubscription(userId);
+    console.log('[Subscription] RESTORE_OK', { userId, plan: sub.plan });
     res.json(sub);
   } catch (err) {
     next(err);
+  }
+}
+
+export async function trial(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const userId = (req as AuthRequest).userId;
+  try {
+    const sub = await subscriptionService.startTrial(userId);
+    res.status(201).json(sub);
+  } catch (err) {
+    handleError(err, res, next);
   }
 }
 

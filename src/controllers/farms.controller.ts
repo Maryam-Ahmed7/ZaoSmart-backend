@@ -33,7 +33,7 @@ function toDto(farm: {
 
 export async function create(req: Request, res: Response, next: NextFunction): Promise<void> {
   const userId = (req as AuthRequest).userId;
-  const { name, cropType, location, sizeHa, notes } = req.body ?? {};
+  const { id, name, cropType, location, sizeHa, notes } = req.body ?? {};
 
   if (!name || !cropType) {
     res.status(400).json({ error: 'name and cropType are required' });
@@ -45,7 +45,7 @@ export async function create(req: Request, res: Response, next: NextFunction): P
   }
 
   try {
-    const farm = await farmsService.createFarm(userId, { name, cropType, location, sizeHa, notes });
+    const farm = await farmsService.createFarm(userId, { id, name, cropType, location, sizeHa, notes });
     res.status(201).json(toDto(farm));
   } catch (err) {
     handleError(err, res, next);

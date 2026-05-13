@@ -8,6 +8,7 @@ export class ScanError extends Error {
 }
 
 type CreateData = {
+  id?:              string;   // client-provided UUID — preserved for cross-device consistency
   cropType:         string;
   predictedDisease?: string | null;
   diseaseId?:       string | null;
@@ -27,14 +28,31 @@ type ListFilters = {
 const DISEASE_INCLUDE = { disease: true } as const;
 
 export async function createScan(userId: string, data: CreateData) {
+  console.log('[ScansService] CREATE_SCAN', {
+    userId,
+    id:       data.id,
+    cropType: data.cropType,
+    disease:  data.predictedDisease,
+    confidence: data.confidence,
+    farmId:   data.farmId,
+  });
+
   if (data.farmId) {
     const farm = await prisma.farm.findFirst({ where: { id: data.farmId, userId } });
-    if (!farm) throw new ScanError(404, 'Farm not found');
+    if (!farm) {
+      console.warn('[ScansService] FARM_NOT_FOUND — storing scan without farm link', {
+        farmId: data.farmId,
+        userId,
+      });
+      // Do not throw — store the scan without the farm link rather than losing the record.
+      data = { ...data, farmId: null };
+    }
   }
 
-  // Prefer explicit diseaseId; fall back to name lookup for backward compat
-  let diseaseId = data.diseaseId ?? null;
-  if (!diseaseId && data.predictedDisease) {
+  // Always resolve disease via name — the client's diseaseId is a model-local
+  // identifier, not a database UUID, so it cannot be used as a foreign key.
+  let diseaseId: string | null = null;
+  if (data.predictedDisease) {
     const match = await prisma.disease.findFirst({
       where:  { name: { equals: data.predictedDisease, mode: 'insensitive' } },
       select: { id: true },
@@ -42,21 +60,46 @@ export async function createScan(userId: string, data: CreateData) {
     diseaseId = match?.id ?? null;
   }
 
-  return prisma.scan.create({
-    data: {
-      userId,
-      farmId:           data.farmId           ?? null,
-      diseaseId,
-      cropType:         data.cropType,
-      predictedDisease: data.predictedDisease  ?? null,
-      confidence:       data.confidence        ?? null,
-      confidenceTier:   data.confidenceTier    ?? null,
-      severity:         data.severity          ?? null,
-      isPremiumResult:  data.isPremiumResult   ?? false,
-      notes:            data.notes             ?? null,
-    },
-    include: DISEASE_INCLUDE,
-  });
+  let scan;
+  if (data.id) {
+    scan = await prisma.scan.upsert({
+      where: { id: data.id },
+      update: {},
+      create: {
+        id:               data.id,
+        userId,
+        farmId:           data.farmId           ?? null,
+        diseaseId,
+        cropType:         data.cropType,
+        predictedDisease: data.predictedDisease  ?? null,
+        confidence:       data.confidence        ?? null,
+        confidenceTier:   data.confidenceTier    ?? null,
+        severity:         data.severity          ?? null,
+        isPremiumResult:  data.isPremiumResult   ?? false,
+        notes:            data.notes             ?? null,
+      },
+      include: DISEASE_INCLUDE,
+    });
+  } else {
+    scan = await prisma.scan.create({
+      data: {
+        userId,
+        farmId:           data.farmId           ?? null,
+        diseaseId,
+        cropType:         data.cropType,
+        predictedDisease: data.predictedDisease  ?? null,
+        confidence:       data.confidence        ?? null,
+        confidenceTier:   data.confidenceTier    ?? null,
+        severity:         data.severity          ?? null,
+        isPremiumResult:  data.isPremiumResult   ?? false,
+        notes:            data.notes             ?? null,
+      },
+      include: DISEASE_INCLUDE,
+    });
+  }
+
+  console.log('[ScansService] SCAN_CREATED', { id: scan.id, userId });
+  return scan;
 }
 
 export async function listScans(userId: string, filters: ListFilters) {

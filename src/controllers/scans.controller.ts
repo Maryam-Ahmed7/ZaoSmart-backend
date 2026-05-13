@@ -51,6 +51,7 @@ export async function create(req: Request, res: Response, next: NextFunction): P
   const userId = (req as AuthRequest).userId;
   // Accept both frontend field names (cropId, diseaseName) and legacy names
   const {
+    id,
     cropId, cropType,
     diseaseName, predictedDisease,
     diseaseId,
@@ -71,6 +72,7 @@ export async function create(req: Request, res: Response, next: NextFunction): P
 
   try {
     const scan = await scansService.createScan(userId, {
+      id:               id               ?? undefined,
       cropType:         resolvedCropType,
       predictedDisease: resolvedDisease  ?? null,
       diseaseId:        diseaseId        ?? null,

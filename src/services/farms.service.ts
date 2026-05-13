@@ -8,6 +8,7 @@ export class FarmError extends Error {
 }
 
 type CreateData = {
+  id?:      string;   // client-provided UUID — preserved so scan farmId refs stay valid
   name:     string;
   cropType: string;
   location?: string | null;
@@ -15,20 +16,41 @@ type CreateData = {
   notes?:   string | null;
 };
 
-type UpdateData = Partial<CreateData>;
+type UpdateData = Partial<Omit<CreateData, 'id'>>;
 
 export async function createFarm(userId: string, data: CreateData) {
-  console.log('[FarmsService] CREATE_FARM', { userId, name: data.name, cropType: data.cropType });
-  const farm = await prisma.farm.create({
-    data: {
-      userId,
-      name:     data.name,
-      cropType: data.cropType,
-      location: data.location ?? null,
-      sizeHa:   data.sizeHa   ?? null,
-      notes:    data.notes    ?? null,
-    },
-  });
+  console.log('[FarmsService] CREATE_FARM', { userId, id: data.id, name: data.name, cropType: data.cropType });
+
+  let farm;
+  if (data.id) {
+    // Upsert with client ID so farm references from scans/reminders remain valid.
+    // If the ID already exists (e.g., from a previous batch sync) the update is a no-op.
+    farm = await prisma.farm.upsert({
+      where: { id: data.id },
+      update: {},
+      create: {
+        id:       data.id,
+        userId,
+        name:     data.name,
+        cropType: data.cropType,
+        location: data.location ?? null,
+        sizeHa:   data.sizeHa   ?? null,
+        notes:    data.notes    ?? null,
+      },
+    });
+  } else {
+    farm = await prisma.farm.create({
+      data: {
+        userId,
+        name:     data.name,
+        cropType: data.cropType,
+        location: data.location ?? null,
+        sizeHa:   data.sizeHa   ?? null,
+        notes:    data.notes    ?? null,
+      },
+    });
+  }
+
   console.log('[FarmsService] FARM_CREATED', { id: farm.id, userId });
   return farm;
 }

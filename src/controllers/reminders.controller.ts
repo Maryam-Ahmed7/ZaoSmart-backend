@@ -34,7 +34,7 @@ function toDto(r: {
 
 export async function create(req: Request, res: Response, next: NextFunction): Promise<void> {
   const userId = (req as AuthRequest).userId;
-  const { title, scheduledAt, cropId, farmId, recurrence, isCompleted } = req.body ?? {};
+  const { id, title, scheduledAt, cropId, farmId, recurrence, isCompleted } = req.body ?? {};
 
   if (!title || !scheduledAt) {
     res.status(400).json({ error: 'title and scheduledAt are required' });
@@ -47,7 +47,7 @@ export async function create(req: Request, res: Response, next: NextFunction): P
 
   try {
     const reminder = await remindersService.createReminder(userId, {
-      title, scheduledAt, cropId, farmId, recurrence, isCompleted,
+      id, title, scheduledAt, cropId, farmId, recurrence, isCompleted,
     });
     res.status(201).json(toDto(reminder));
   } catch (err) {

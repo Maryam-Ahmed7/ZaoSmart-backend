@@ -8,15 +8,16 @@ export class ReminderError extends Error {
 }
 
 type CreateData = {
-  title:       string;
-  scheduledAt: string;
-  cropId?:     string | null;
-  farmId?:     string | null;
-  recurrence?: string | null;
+  id?:          string;   // client-provided UUID — preserved for cross-device consistency
+  title:        string;
+  scheduledAt:  string;
+  cropId?:      string | null;
+  farmId?:      string | null;
+  recurrence?:  string | null;
   isCompleted?: boolean;
 };
 
-type UpdateData = Partial<CreateData>;
+type UpdateData = Partial<Omit<CreateData, 'id'>>;
 
 type ListFilters = {
   farmId?:   string;
@@ -26,23 +27,43 @@ type ListFilters = {
 };
 
 export async function createReminder(userId: string, data: CreateData) {
-  console.log('[RemindersService] CREATE_REMINDER', { userId, title: data.title, scheduledAt: data.scheduledAt });
+  console.log('[RemindersService] CREATE_REMINDER', { userId, id: data.id, title: data.title });
+
   if (data.farmId) {
     const farm = await prisma.farm.findFirst({ where: { id: data.farmId, userId } });
     if (!farm) throw new ReminderError(404, 'Farm not found');
   }
 
-  const reminder = await prisma.reminder.create({
-    data: {
-      userId,
-      title:       data.title,
-      scheduledAt: new Date(data.scheduledAt),
-      cropId:      data.cropId      ?? null,
-      farmId:      data.farmId      ?? null,
-      recurrence:  data.recurrence  ?? null,
-      isCompleted: data.isCompleted ?? false,
-    },
-  });
+  let reminder;
+  if (data.id) {
+    reminder = await prisma.reminder.upsert({
+      where: { id: data.id },
+      update: {},
+      create: {
+        id:          data.id,
+        userId,
+        title:       data.title,
+        scheduledAt: new Date(data.scheduledAt),
+        cropId:      data.cropId      ?? null,
+        farmId:      data.farmId      ?? null,
+        recurrence:  data.recurrence  ?? null,
+        isCompleted: data.isCompleted ?? false,
+      },
+    });
+  } else {
+    reminder = await prisma.reminder.create({
+      data: {
+        userId,
+        title:       data.title,
+        scheduledAt: new Date(data.scheduledAt),
+        cropId:      data.cropId      ?? null,
+        farmId:      data.farmId      ?? null,
+        recurrence:  data.recurrence  ?? null,
+        isCompleted: data.isCompleted ?? false,
+      },
+    });
+  }
+
   console.log('[RemindersService] REMINDER_CREATED', { id: reminder.id, userId });
   return reminder;
 }
