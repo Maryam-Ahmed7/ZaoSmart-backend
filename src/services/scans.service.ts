@@ -8,10 +8,10 @@ export class ScanError extends Error {
 }
 
 type CreateData = {
-  id?:              string;   // client-provided UUID — preserved for cross-device consistency
+  id?:              string;
   cropType:         string;
-  predictedDisease?: string | null;
-  diseaseId?:       string | null;
+  predictedDisease?: string | null;  // display name  e.g. "Gray Leaf Spot"
+  diseaseId?:       string | null;   // model key     e.g. "maize_gray_leaf_spot"
   farmId?:          string | null;
   confidence?:      number | null;
   confidenceTier?:  string | null;
@@ -30,95 +30,115 @@ const DISEASE_INCLUDE = { disease: true } as const;
 export async function createScan(userId: string, data: CreateData) {
   console.log('[ScansService] CREATE_SCAN', {
     userId,
-    id:       data.id,
-    cropType: data.cropType,
-    disease:  data.predictedDisease,
+    scanId:    data.id,
+    cropType:  data.cropType,
+    disease:   data.predictedDisease,
+    modelKey:  data.diseaseId,
     confidence: data.confidence,
-    farmId:   data.farmId,
+    farmId:    data.farmId,
   });
 
+  // ── Farm validation ────────────────────────────────────────────────────────
   if (data.farmId) {
     const farm = await prisma.farm.findFirst({ where: { id: data.farmId, userId } });
     if (!farm) {
-      console.warn('[ScansService] FARM_NOT_FOUND — storing scan without farm link', {
-        farmId: data.farmId,
-        userId,
-      });
-      // Do not throw — store the scan without the farm link rather than losing the record.
+      console.warn('[ScansService] FARM_NOT_FOUND — storing scan without farm link', { farmId: data.farmId, userId });
       data = { ...data, farmId: null };
     }
   }
 
-  // ── Disease resolution ────────────────────────────────────────────────────
-  // Audit: log exactly what the incoming scan carries so we can spot mismatches
-  // between what the frontend sends and what the DB lookup expects.
-  console.log('[DiseaseResolver] INCOMING_PAYLOAD', {
-    predictedDisease:  data.predictedDisease,   // ← must be non-null/non-empty to proceed
-    clientDiseaseId:   data.diseaseId,           // model-local ID (ignored for DB FK)
-    cropType:          data.cropType,
-    severity:          data.severity,
-    willResolve:       !!data.predictedDisease,  // false = resolver skipped entirely
+  // ── Disease resolution ─────────────────────────────────────────────────────
+  // Two identifiers arrive from the frontend:
+  //   predictedDisease = display name  e.g. "Gray Leaf Spot"
+  //   diseaseId        = model key     e.g. "maize_gray_leaf_spot"
+  //
+  // Strategy: try display name first (better for human readability in Prisma),
+  // fall back to model key, create row if neither exists — so the Disease table
+  // is populated dynamically from real scan uploads without any manual seeding.
+
+  const displayName   = data.predictedDisease?.trim() || null;
+  const modelKey      = data.diseaseId?.trim()        || null;
+  const anyIdentifier = displayName ?? modelKey;
+
+  console.log('[DISEASE] PAYLOAD_RECEIVED', {
+    displayName,
+    modelKey,
+    anyIdentifier,
+    cropType:  data.cropType,
+    severity:  data.severity ?? null,
   });
 
-  let diseaseId: string | null = null;
+  let resolvedDiseaseId: string | null = null;
 
-  if (!data.predictedDisease) {
-    // diseaseName was empty or missing — nothing to look up or create.
-    console.warn('[DiseaseResolver] SKIPPED — predictedDisease is null/empty; scan will have diseaseId=null');
+  if (!anyIdentifier) {
+    console.warn('[DISEASE] SKIPPED — both diseaseName and modelKey are null/empty; diseaseId will be null on scan');
   } else {
-    console.log('[DiseaseResolver] LOOKUP_START', {
-      searchName: data.predictedDisease,
-      cropType:   data.cropType,
-    });
 
-    let disease = await prisma.disease.findFirst({
-      where: { name: { equals: data.predictedDisease, mode: 'insensitive' } },
-    });
+    // ── Step 1: look up by display name (insensitive exact match) ─────────
+    console.log('[DISEASE] LOOKUP', { strategy: 'displayName', value: displayName });
 
-    console.log('[DiseaseResolver] LOOKUP_RESULT', {
-      found:        !!disease,
-      existingId:   disease?.id   ?? null,
-      existingName: disease?.name ?? null,
-    });
+    let disease = displayName
+      ? await prisma.disease.findFirst({
+          where: { name: { equals: displayName, mode: 'insensitive' } },
+        })
+      : null;
 
+    // ── Step 2: fall back to model key if display name returned nothing ───
+    if (!disease && modelKey) {
+      console.log('[DISEASE] LOOKUP', { strategy: 'modelKey_fallback', value: modelKey });
+      disease = await prisma.disease.findFirst({
+        where: { name: { equals: modelKey, mode: 'insensitive' } },
+      });
+    }
+
+    // ── Step 3: not found → auto-create ───────────────────────────────────
     if (!disease) {
-      console.log('[DiseaseResolver] NOT_FOUND — will auto-create');
-      console.log('[DiseaseResolver] AUTO_CREATE', {
-        name:     data.predictedDisease,
+      const nameToStore = displayName ?? modelKey!;
+      console.log('[DISEASE] NOT_FOUND', {
+        triedDisplayName: displayName,
+        triedModelKey:    modelKey,
+        willCreate:       nameToStore,
+      });
+      console.log('[DISEASE] CREATED — inserting Disease row', {
+        name:     nameToStore,
         cropType: data.cropType,
         severity: data.severity ?? 'moderate',
       });
 
-      // upsert guards against duplicate-key race on concurrent syncs
+      // upsert prevents unique-constraint crash if two syncs race on the same name
       disease = await prisma.disease.upsert({
-        where:  { name: data.predictedDisease },
+        where:  { name: nameToStore },
         update: {},
         create: {
-          name:        data.predictedDisease,
+          name:        nameToStore,
           cropType:    data.cropType,
-          description: `Auto-created via ZaoSmart AI scan: ${data.predictedDisease}`,
+          description: `Auto-created by ZaoSmart AI scan: ${nameToStore}`,
           severity:    data.severity ?? 'moderate',
-          symptoms:    'Detected by on-device TFLite model. Manual verification recommended.',
-          treatment:   'Consult a local agronomist for specific treatment guidance.',
+          symptoms:    'Detected by on-device TFLite model. Manual agronomist review recommended.',
+          treatment:   'Consult a local agronomist for treatment guidance.',
           isActive:    true,
         },
       });
 
-      console.log('[DiseaseResolver] CREATED', {
-        id:   disease.id,
-        name: disease.name,
-      });
+      console.log('[DISEASE] CREATED', { id: disease.id, name: disease.name, cropType: disease.cropType });
+    } else {
+      console.log('[DISEASE] FOUND', { id: disease.id, name: disease.name });
     }
 
-    diseaseId = disease.id;
-    console.log('[DiseaseResolver] LINKED_TO_SCAN', { diseaseId, diseaseName: disease.name });
+    resolvedDiseaseId = disease.id;
+    console.log('[DISEASE] CONNECTED_TO_SCAN', {
+      diseaseId:   resolvedDiseaseId,
+      diseaseName: disease.name,
+      scanId:      data.id ?? '(server-assigned)',
+    });
   }
 
+  // ── Prisma insert ──────────────────────────────────────────────────────────
   const insertPayload = {
     id:               data.id,
     userId,
     farmId:           data.farmId           ?? null,
-    diseaseId,
+    diseaseId:        resolvedDiseaseId,             // ← DB UUID now, not model key
     cropType:         data.cropType,
     predictedDisease: data.predictedDisease  ?? null,
     confidence:       data.confidence        ?? null,
@@ -127,7 +147,7 @@ export async function createScan(userId: string, data: CreateData) {
     isPremiumResult:  data.isPremiumResult   ?? false,
     notes:            data.notes             ?? null,
   };
-  console.log('[ScansService] INSERT_SCAN — Prisma payload:', JSON.stringify(insertPayload));
+  console.log('[ScansService] INSERT_SCAN', JSON.stringify(insertPayload));
 
   let scan;
   try {
@@ -156,7 +176,12 @@ export async function createScan(userId: string, data: CreateData) {
     throw prismaErr;
   }
 
-  console.log('[ScansService] SCAN_CREATED', { id: scan.id, userId });
+  console.log('[ScansService] SCAN_CREATED', {
+    id:        scan.id,
+    userId,
+    diseaseId: scan.diseaseId,
+    cropType:  scan.cropType,
+  });
   return scan;
 }
 
