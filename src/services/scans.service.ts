@@ -49,15 +49,45 @@ export async function createScan(userId: string, data: CreateData) {
     }
   }
 
-  // Always resolve disease via name — the client's diseaseId is a model-local
-  // identifier, not a database UUID, so it cannot be used as a foreign key.
+  // Resolve disease — look up by name, auto-create if not found.
+  // The Disease table starts empty; records are built the first time each
+  // disease name arrives via scan sync so the table fills organically.
+  // The client's diseaseId is a model-local label, not a DB UUID.
   let diseaseId: string | null = null;
   if (data.predictedDisease) {
-    const match = await prisma.disease.findFirst({
-      where:  { name: { equals: data.predictedDisease, mode: 'insensitive' } },
-      select: { id: true },
+    console.log('[DiseaseResolver] LOOKUP_START', { name: data.predictedDisease, cropType: data.cropType });
+
+    let disease = await prisma.disease.findFirst({
+      where: { name: { equals: data.predictedDisease, mode: 'insensitive' } },
     });
-    diseaseId = match?.id ?? null;
+
+    console.log('[DiseaseResolver] LOOKUP_RESULT', { found: !!disease, id: disease?.id ?? null });
+
+    if (!disease) {
+      console.log('[DiseaseResolver] CREATE_DISEASE_IF_MISSING', {
+        name:     data.predictedDisease,
+        cropType: data.cropType,
+        severity: data.severity ?? 'moderate',
+      });
+      // upsert protects against a unique-constraint race if two syncs arrive simultaneously
+      disease = await prisma.disease.upsert({
+        where:  { name: data.predictedDisease },
+        update: {},
+        create: {
+          name:        data.predictedDisease,
+          cropType:    data.cropType,
+          description: `Auto-created via ZaoSmart AI scan: ${data.predictedDisease}`,
+          severity:    data.severity ?? 'moderate',
+          symptoms:    'Detected by on-device TFLite model. Manual verification recommended.',
+          treatment:   'Consult a local agronomist for specific treatment guidance.',
+          isActive:    true,
+        },
+      });
+      console.log('[DiseaseResolver] DISEASE_CREATED', { id: disease.id, name: disease.name });
+    }
+
+    diseaseId = disease.id;
+    console.log('[DiseaseResolver] RESOLVED', { diseaseId });
   }
 
   const insertPayload = {
