@@ -61,6 +61,18 @@ export async function create(req: Request, res: Response, next: NextFunction): P
   const resolvedCropType = cropId ?? cropType;
   const resolvedDisease  = diseaseName ?? predictedDisease;
 
+  console.log('[ScansController] CREATE_SCAN_REQUEST', {
+    userId,
+    id,
+    resolvedCropType,
+    resolvedDisease,
+    farmId:          farmId ?? null,
+    confidence:      confidence ?? null,
+    confidenceTier:  confidenceTier ?? null,
+    isPremiumResult: isPremiumResult ?? false,
+    rawBody: req.body,
+  });
+
   if (!resolvedCropType) {
     res.status(400).json({ error: 'cropId (or cropType) is required' });
     return;

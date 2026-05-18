@@ -60,42 +60,46 @@ export async function createScan(userId: string, data: CreateData) {
     diseaseId = match?.id ?? null;
   }
 
+  const insertPayload = {
+    id:               data.id,
+    userId,
+    farmId:           data.farmId           ?? null,
+    diseaseId,
+    cropType:         data.cropType,
+    predictedDisease: data.predictedDisease  ?? null,
+    confidence:       data.confidence        ?? null,
+    confidenceTier:   data.confidenceTier    ?? null,
+    severity:         data.severity          ?? null,
+    isPremiumResult:  data.isPremiumResult   ?? false,
+    notes:            data.notes             ?? null,
+  };
+  console.log('[ScansService] INSERT_SCAN — Prisma payload:', JSON.stringify(insertPayload));
+
   let scan;
-  if (data.id) {
-    scan = await prisma.scan.upsert({
-      where: { id: data.id },
-      update: {},
-      create: {
-        id:               data.id,
-        userId,
-        farmId:           data.farmId           ?? null,
-        diseaseId,
-        cropType:         data.cropType,
-        predictedDisease: data.predictedDisease  ?? null,
-        confidence:       data.confidence        ?? null,
-        confidenceTier:   data.confidenceTier    ?? null,
-        severity:         data.severity          ?? null,
-        isPremiumResult:  data.isPremiumResult   ?? false,
-        notes:            data.notes             ?? null,
-      },
-      include: DISEASE_INCLUDE,
+  try {
+    if (data.id) {
+      scan = await prisma.scan.upsert({
+        where:   { id: data.id },
+        update:  {},
+        create:  insertPayload,
+        include: DISEASE_INCLUDE,
+      });
+    } else {
+      const { id: _id, ...createPayload } = insertPayload;
+      scan = await prisma.scan.create({
+        data:    createPayload,
+        include: DISEASE_INCLUDE,
+      });
+    }
+  } catch (prismaErr: unknown) {
+    const e = prismaErr as Error & { code?: string; meta?: unknown };
+    console.error('[ScansService] PRISMA_ERROR', {
+      message: e.message,
+      code:    e.code,
+      meta:    e.meta,
+      stack:   e.stack,
     });
-  } else {
-    scan = await prisma.scan.create({
-      data: {
-        userId,
-        farmId:           data.farmId           ?? null,
-        diseaseId,
-        cropType:         data.cropType,
-        predictedDisease: data.predictedDisease  ?? null,
-        confidence:       data.confidence        ?? null,
-        confidenceTier:   data.confidenceTier    ?? null,
-        severity:         data.severity          ?? null,
-        isPremiumResult:  data.isPremiumResult   ?? false,
-        notes:            data.notes             ?? null,
-      },
-      include: DISEASE_INCLUDE,
-    });
+    throw prismaErr;
   }
 
   console.log('[ScansService] SCAN_CREATED', { id: scan.id, userId });
