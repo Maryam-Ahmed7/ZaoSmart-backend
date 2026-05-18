@@ -49,27 +49,47 @@ export async function createScan(userId: string, data: CreateData) {
     }
   }
 
-  // Resolve disease — look up by name, auto-create if not found.
-  // The Disease table starts empty; records are built the first time each
-  // disease name arrives via scan sync so the table fills organically.
-  // The client's diseaseId is a model-local label, not a DB UUID.
+  // ── Disease resolution ────────────────────────────────────────────────────
+  // Audit: log exactly what the incoming scan carries so we can spot mismatches
+  // between what the frontend sends and what the DB lookup expects.
+  console.log('[DiseaseResolver] INCOMING_PAYLOAD', {
+    predictedDisease:  data.predictedDisease,   // ← must be non-null/non-empty to proceed
+    clientDiseaseId:   data.diseaseId,           // model-local ID (ignored for DB FK)
+    cropType:          data.cropType,
+    severity:          data.severity,
+    willResolve:       !!data.predictedDisease,  // false = resolver skipped entirely
+  });
+
   let diseaseId: string | null = null;
-  if (data.predictedDisease) {
-    console.log('[DiseaseResolver] LOOKUP_START', { name: data.predictedDisease, cropType: data.cropType });
+
+  if (!data.predictedDisease) {
+    // diseaseName was empty or missing — nothing to look up or create.
+    console.warn('[DiseaseResolver] SKIPPED — predictedDisease is null/empty; scan will have diseaseId=null');
+  } else {
+    console.log('[DiseaseResolver] LOOKUP_START', {
+      searchName: data.predictedDisease,
+      cropType:   data.cropType,
+    });
 
     let disease = await prisma.disease.findFirst({
       where: { name: { equals: data.predictedDisease, mode: 'insensitive' } },
     });
 
-    console.log('[DiseaseResolver] LOOKUP_RESULT', { found: !!disease, id: disease?.id ?? null });
+    console.log('[DiseaseResolver] LOOKUP_RESULT', {
+      found:        !!disease,
+      existingId:   disease?.id   ?? null,
+      existingName: disease?.name ?? null,
+    });
 
     if (!disease) {
-      console.log('[DiseaseResolver] CREATE_DISEASE_IF_MISSING', {
+      console.log('[DiseaseResolver] NOT_FOUND — will auto-create');
+      console.log('[DiseaseResolver] AUTO_CREATE', {
         name:     data.predictedDisease,
         cropType: data.cropType,
         severity: data.severity ?? 'moderate',
       });
-      // upsert protects against a unique-constraint race if two syncs arrive simultaneously
+
+      // upsert guards against duplicate-key race on concurrent syncs
       disease = await prisma.disease.upsert({
         where:  { name: data.predictedDisease },
         update: {},
@@ -83,11 +103,15 @@ export async function createScan(userId: string, data: CreateData) {
           isActive:    true,
         },
       });
-      console.log('[DiseaseResolver] DISEASE_CREATED', { id: disease.id, name: disease.name });
+
+      console.log('[DiseaseResolver] CREATED', {
+        id:   disease.id,
+        name: disease.name,
+      });
     }
 
     diseaseId = disease.id;
-    console.log('[DiseaseResolver] RESOLVED', { diseaseId });
+    console.log('[DiseaseResolver] LINKED_TO_SCAN', { diseaseId, diseaseName: disease.name });
   }
 
   const insertPayload = {
